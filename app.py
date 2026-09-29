@@ -114,12 +114,22 @@ _REALTY = {k:_NEXT50.get(k) or v for k,v in {
  "IBREALEST":("Indiabulls Real Estate","Realty"),
 }.items()}
 
+_SENSEX30 = {k:_NIFTY50.get(k) or v for k,v in {
+ "RELIANCE":0,"TCS":0,"HDFCBANK":0,"ICICIBANK":0,"INFY":0,"BHARTIARTL":0,"ITC":0,"SBIN":0,
+ "LT":0,"HINDUNILVR":0,"KOTAKBANK":0,"BAJFINANCE":0,"AXISBANK":0,"M&M":0,"MARUTI":0,
+ "SUNPHARMA":0,"HCLTECH":0,"ULTRACEMCO":0,"TITAN":0,"NTPC":0,"TATAMOTORS":0,"BAJAJFINSV":0,
+ "POWERGRID":0,"ADANIPORTS":0,"JSWSTEEL":0,"TATASTEEL":0,"TECHM":0,"ASIANPAINT":0,
+ "INDUSINDBK":0,
+}.items()}
+
 GROUPS = {
     "Nifty 50 (Large cap)": _NIFTY50, "Nifty Next 50": _NEXT50,
     "Nifty Bank": _BANK, "Nifty IT": _IT, "Nifty Auto": _AUTO,
     "Nifty Pharma": _PHARMA, "Nifty FMCG": _FMCG, "Nifty Metal": _METAL,
     "Nifty Energy": _ENERGY, "Nifty Realty": _REALTY,
+    "Sensex 30 (BSE)": _SENSEX30,
 }
+CUSTOM_LABEL = "Custom (paste your own symbols)"
 TF = {"15m": ("15m", "30d"), "1h": ("1h", "6mo"), "4h": ("1h", "6mo"), "1d": ("1d", "2y")}
 _cache = {}
 
@@ -204,7 +214,7 @@ def guard():
 @app.route("/api/meta")
 def meta():
     inds = sorted({v[1] for g in GROUPS.values() for v in g.values()})
-    return jsonify(groups=list(GROUPS), industries=inds)
+    return jsonify(groups=list(GROUPS) + [CUSTOM_LABEL], industries=inds)
 
 
 @app.route("/api/scan")
@@ -213,11 +223,18 @@ def scan():
     ex, grp, ind = a.get("exchange", "NSE"), a.get("group", "Nifty 50 (Large cap)"), a.get("industry", "")
     tf, want = a.get("tf", "1d"), a.get("type", "both")
     within, n = int(a.get("within", 3)), int(a.get("swing", 3))
-    try:
-        u = load_group(grp)
-    except Exception as e:
-        return jsonify(error=f"Could not load index list: {e}"), 502
-    if ind: u = u[u["Industry"] == ind]
+    if grp == CUSTOM_LABEL:
+        raw = a.get("symbols", "")
+        syms = sorted({s.strip().upper() for s in raw.replace(",", "\n").split("\n") if s.strip()})
+        if not syms:
+            return jsonify(error="Paste at least one symbol first."), 400
+        u = pd.DataFrame({"Symbol": syms, "Company Name": syms, "Industry": ["Custom"] * len(syms)})
+    else:
+        try:
+            u = load_group(grp)
+        except Exception as e:
+            return jsonify(error=f"Could not load index list: {e}"), 502
+        if ind: u = u[u["Industry"] == ind]
     sfx = ".NS" if ex == "NSE" else ".BO"
     names = {s + sfx: (nm, i) for s, nm, i in zip(u["Symbol"], u["Company Name"], u["Industry"])}
     key = f"scan:{ex}:{tf}:{hash(tuple(names))}"
@@ -256,6 +273,8 @@ table{width:100%;border-collapse:collapse;min-width:720px}th,td{padding:10px 12p
 <div><label>Exchange</label><select id="ex"><option>NSE</option><option>BSE</option></select></div>
 <div><label>Segment / Index</label><select id="grp"></select></div>
 <div><label>Sector / Industry</label><select id="ind"><option value="">All</option></select></div>
+<div id="custwrap" style="display:none;grid-column:1/-1"><label>Paste symbols (comma or new line separated, e.g. RELIANCE, TCS, INFY)</label><textarea id="custom" rows="3" style="width:100%;padding:9px;border-radius:8px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font-family:inherit"></textarea>
+<p style="font-size:12px;color:var(--mu);margin:6px 0 0">To get the full Nifty 500 list: open <a href="https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv" target="_blank">this link</a> in your own browser (it only blocks automated requests, not you), open the downloaded CSV in Excel, copy the Symbol column, and paste it here.</p></div>
 <div><label>Timeframe</label><select id="tf"><option value="15m">15 min</option><option value="1h">1 hour</option><option value="4h">4 hour</option><option value="1d" selected>Daily</option></select></div>
 <div><label>CHoCH type</label><select id="type"><option value="both">Both</option><option value="bull">Bullish</option><option value="bear">Bearish</option></select></div>
 <div><label>Within last (candles)</label><input id="within" type="number" value="3" min="0" max="50"></div>
@@ -268,8 +287,9 @@ const $=i=>document.getElementById(i);const H=()=>({'X-Key':$('key').value||loca
 function fill(sel,arr){arr.forEach(v=>{const o=document.createElement('option');o.textContent=v;o.value=v;$(sel).appendChild(o)})}
 fetch('/api/meta').then(r=>r.json()).then(m=>{fill('grp',m.groups);fill('ind',m.industries)}).catch(()=>{$('keyw').style.display='block'});
 $('key').value=localStorage.k||'';
+$('grp').onchange=()=>{$('custwrap').style.display=$('grp').value.startsWith('Custom')?'block':'none'};
 $('go').onclick=async()=>{localStorage.k=$('key').value;$('go').disabled=true;$('st').textContent='Scanning… first run can take up to a minute.';$('tb').innerHTML='';
-const q=new URLSearchParams({exchange:$('ex').value,group:$('grp').value,industry:$('ind').value,tf:$('tf').value,type:$('type').value,within:$('within').value,swing:$('swing').value});
+const q=new URLSearchParams({exchange:$('ex').value,group:$('grp').value,industry:$('ind').value,tf:$('tf').value,type:$('type').value,within:$('within').value,swing:$('swing').value,symbols:$('custom').value});
 try{const r=await fetch('/api/scan?'+q,{headers:H()});const d=await r.json();
 if(d.error){$('st').textContent=d.error;if(r.status==401)$('keyw').style.display='block';}
 else{$('st').textContent=`${d.rows.length} match(es) · scanned ${d.scanned} of ${d.total} stocks`;
