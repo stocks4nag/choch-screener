@@ -5,15 +5,120 @@ from flask import Flask, jsonify, request, Response
 app = Flask(__name__)
 ACCESS_KEY = os.environ.get("ACCESS_KEY", "")  # optional password for personal use
 UA = {"User-Agent": "Mozilla/5.0"}
+# --- Built-in stock lists -------------------------------------------------
+# niftyindices.com / nseindia.com block requests from cloud servers (Render,
+# AWS, etc.) with a 403, even with browser-like headers. To keep this app
+# working reliably, the index/sector lists are bundled here instead of being
+# fetched live. Composition changes a few times a year - see the note in the
+# chat reply for how to refresh this list later.
+# Format: symbol -> (Company Name, Industry)
+
+_NIFTY50 = {
+ "RELIANCE":("Reliance Industries","Energy"),"TCS":("Tata Consultancy Services","IT"),
+ "HDFCBANK":("HDFC Bank","Financial Services"),"ICICIBANK":("ICICI Bank","Financial Services"),
+ "INFY":("Infosys","IT"),"BHARTIARTL":("Bharti Airtel","Telecom"),"ITC":("ITC","FMCG"),
+ "SBIN":("State Bank of India","Financial Services"),"LT":("Larsen & Toubro","Construction"),
+ "HINDUNILVR":("Hindustan Unilever","FMCG"),"KOTAKBANK":("Kotak Mahindra Bank","Financial Services"),
+ "BAJFINANCE":("Bajaj Finance","Financial Services"),"AXISBANK":("Axis Bank","Financial Services"),
+ "M&M":("Mahindra & Mahindra","Auto"),"MARUTI":("Maruti Suzuki","Auto"),
+ "SUNPHARMA":("Sun Pharmaceutical","Pharma"),"HCLTECH":("HCL Technologies","IT"),
+ "ULTRACEMCO":("UltraTech Cement","Cement"),"TITAN":("Titan Company","Consumer Durables"),
+ "NTPC":("NTPC","Power"),"TATAMOTORS":("Tata Motors","Auto"),
+ "BAJAJFINSV":("Bajaj Finserv","Financial Services"),"ONGC":("Oil & Natural Gas Corp","Energy"),
+ "ADANIENT":("Adani Enterprises","Diversified"),"POWERGRID":("Power Grid Corp","Power"),
+ "WIPRO":("Wipro","IT"),"NESTLEIND":("Nestle India","FMCG"),
+ "ADANIPORTS":("Adani Ports & SEZ","Infrastructure"),"JSWSTEEL":("JSW Steel","Metal"),
+ "COALINDIA":("Coal India","Mining"),"TATASTEEL":("Tata Steel","Metal"),
+ "BEL":("Bharat Electronics","Capital Goods"),"GRASIM":("Grasim Industries","Cement"),
+ "TRENT":("Trent","Retail"),"HINDALCO":("Hindalco Industries","Metal"),
+ "TECHM":("Tech Mahindra","IT"),"SBILIFE":("SBI Life Insurance","Insurance"),
+ "HDFCLIFE":("HDFC Life Insurance","Insurance"),"CIPLA":("Cipla","Pharma"),
+ "BAJAJ-AUTO":("Bajaj Auto","Auto"),"EICHERMOT":("Eicher Motors","Auto"),
+ "DRREDDY":("Dr Reddy's Laboratories","Pharma"),"APOLLOHOSP":("Apollo Hospitals","Healthcare"),
+ "HEROMOTOCO":("Hero MotoCorp","Auto"),"INDUSINDBK":("IndusInd Bank","Financial Services"),
+ "SHRIRAMFIN":("Shriram Finance","Financial Services"),"TATACONSUM":("Tata Consumer Products","FMCG"),
+ "BPCL":("Bharat Petroleum","Energy"),"LTIM":("LTIMindtree","IT"),
+ "ASIANPAINT":("Asian Paints","Consumer Durables"),"BRITANNIA":("Britannia Industries","FMCG"),
+}
+_NEXT50 = {
+ "ABB":("ABB India","Capital Goods"),"ADANIENSOL":("Adani Energy Solutions","Power"),
+ "ADANIGREEN":("Adani Green Energy","Power"),"ADANIPOWER":("Adani Power","Power"),
+ "AMBUJACEM":("Ambuja Cements","Cement"),"BAJAJHLDNG":("Bajaj Holdings","Financial Services"),
+ "BANKBARODA":("Bank of Baroda","Financial Services"),"BERGEPAINT":("Berger Paints","Consumer Durables"),
+ "BOSCHLTD":("Bosch","Auto"),"CHOLAFIN":("Cholamandalam Investment","Financial Services"),
+ "COLPAL":("Colgate-Palmolive India","FMCG"),"DLF":("DLF","Realty"),
+ "DABUR":("Dabur India","FMCG"),"DIVISLAB":("Divi's Laboratories","Pharma"),
+ "GAIL":("GAIL India","Energy"),"GODREJCP":("Godrej Consumer Products","FMCG"),
+ "HAL":("Hindustan Aeronautics","Capital Goods"),"HINDZINC":("Hindustan Zinc","Metal"),
+ "ICICIGI":("ICICI Lombard General Insurance","Insurance"),"ICICIPRULI":("ICICI Prudential Life","Insurance"),
+ "INDHOTEL":("Indian Hotels Company","Hospitality"),"IOC":("Indian Oil Corp","Energy"),
+ "INDUSTOWER":("Indus Towers","Telecom"),"INDIGO":("InterGlobe Aviation","Aviation"),
+ "JINDALSTEL":("Jindal Steel & Power","Metal"),"JSWENERGY":("JSW Energy","Power"),
+ "LICI":("Life Insurance Corp of India","Insurance"),"MARICO":("Marico","FMCG"),
+ "MOTHERSON":("Samvardhana Motherson","Auto"),"MUTHOOTFIN":("Muthoot Finance","Financial Services"),
+ "PIDILITIND":("Pidilite Industries","Chemicals"),"PIIND":("PI Industries","Chemicals"),
+ "PFC":("Power Finance Corp","Financial Services"),"RECLTD":("REC Limited","Financial Services"),
+ "SRF":("SRF","Chemicals"),"SIEMENS":("Siemens","Capital Goods"),
+ "TATAPOWER":("Tata Power","Power"),"TVSMOTOR":("TVS Motor Company","Auto"),
+ "UNITDSPR":("United Spirits","FMCG"),"VEDL":("Vedanta","Metal"),
+ "ZOMATO":("Eternal (Zomato)","Retail"),"ZYDUSLIFE":("Zydus Lifesciences","Pharma"),
+}
+_BANK = {k:_NIFTY50.get(k) or _NEXT50.get(k) or v for k,v in {
+ "HDFCBANK":0,"ICICIBANK":0,"SBIN":0,"KOTAKBANK":0,"AXISBANK":0,"INDUSINDBK":0,"BANKBARODA":0,
+ "PNB":("Punjab National Bank","Financial Services"),"AUBANK":("AU Small Finance Bank","Financial Services"),
+ "IDFCFIRSTB":("IDFC First Bank","Financial Services"),"FEDERALBNK":("Federal Bank","Financial Services"),
+ "CANBK":("Canara Bank","Financial Services"),
+}.items()}
+_IT = {k:_NIFTY50.get(k) or v for k,v in {
+ "TCS":0,"INFY":0,"HCLTECH":0,"WIPRO":0,"TECHM":0,"LTIM":0,
+ "PERSISTENT":("Persistent Systems","IT"),"COFORGE":("Coforge","IT"),
+ "MPHASIS":("Mphasis","IT"),"LTTS":("L&T Technology Services","IT"),
+}.items()}
+_AUTO = {k:_NIFTY50.get(k) or _NEXT50.get(k) or v for k,v in {
+ "MARUTI":0,"M&M":0,"TATAMOTORS":0,"BAJAJ-AUTO":0,"EICHERMOT":0,"HEROMOTOCO":0,"TVSMOTOR":0,
+ "BOSCHLTD":0,"MOTHERSON":0,
+ "ASHOKLEY":("Ashok Leyland","Auto"),"BHARATFORG":("Bharat Forge","Auto"),
+ "BALKRISIND":("Balkrishna Industries","Auto"),"MRF":("MRF","Auto"),
+ "EXIDEIND":("Exide Industries","Auto"),"TIINDIA":("Tube Investments of India","Auto"),
+}.items()}
+_PHARMA = {k:_NIFTY50.get(k) or _NEXT50.get(k) or v for k,v in {
+ "SUNPHARMA":0,"CIPLA":0,"DRREDDY":0,"DIVISLAB":0,"ZYDUSLIFE":0,
+ "TORNTPHARM":("Torrent Pharmaceuticals","Pharma"),"LUPIN":("Lupin","Pharma"),
+ "AUROPHARMA":("Aurobindo Pharma","Pharma"),"ALKEM":("Alkem Laboratories","Pharma"),
+ "MANKIND":("Mankind Pharma","Pharma"),"GLENMARK":("Glenmark Pharmaceuticals","Pharma"),
+ "ABBOTINDIA":("Abbott India","Pharma"),"IPCALAB":("IPCA Laboratories","Pharma"),
+ "LAURUSLABS":("Laurus Labs","Pharma"),"BIOCON":("Biocon","Pharma"),
+}.items()}
+_FMCG = {k:_NIFTY50.get(k) or _NEXT50.get(k) or v for k,v in {
+ "HINDUNILVR":0,"ITC":0,"NESTLEIND":0,"TATACONSUM":0,"BRITANNIA":0,"DABUR":0,"GODREJCP":0,
+ "MARICO":0,"COLPAL":0,"UNITDSPR":0,
+ "VBL":("Varun Beverages","FMCG"),"UBL":("United Breweries","FMCG"),
+ "EMAMILTD":("Emami","FMCG"),"RADICO":("Radico Khaitan","FMCG"),
+}.items()}
+_METAL = {k:_NIFTY50.get(k) or _NEXT50.get(k) or v for k,v in {
+ "TATASTEEL":0,"JSWSTEEL":0,"HINDALCO":0,"VEDL":0,"JINDALSTEL":0,"HINDZINC":0,"COALINDIA":0,
+ "SAIL":("Steel Authority of India","Metal"),"NMDC":("NMDC","Mining"),
+ "NATIONALUM":("National Aluminium Company","Metal"),"APLAPOLLO":("APL Apollo Tubes","Metal"),
+ "RATNAMANI":("Ratnamani Metals & Tubes","Metal"),"HINDCOPPER":("Hindustan Copper","Metal"),
+}.items()}
+_ENERGY = {k:_NIFTY50.get(k) or _NEXT50.get(k) or v for k,v in {
+ "RELIANCE":0,"ONGC":0,"NTPC":0,"POWERGRID":0,"COALINDIA":0,"BPCL":0,"IOC":0,"GAIL":0,
+ "TATAPOWER":0,"ADANIGREEN":0,
+}.items()}
+_REALTY = {k:_NEXT50.get(k) or v for k,v in {
+ "DLF":0,
+ "GODREJPROP":("Godrej Properties","Realty"),"OBEROIRLTY":("Oberoi Realty","Realty"),
+ "PRESTIGE":("Prestige Estates Projects","Realty"),"PHOENIXLTD":("Phoenix Mills","Realty"),
+ "LODHA":("Macrotech Developers","Realty"),"BRIGADE":("Brigade Enterprises","Realty"),
+ "SOBHA":("Sobha","Realty"),"SUNTECK":("Sunteck Realty","Realty"),
+ "IBREALEST":("Indiabulls Real Estate","Realty"),
+}.items()}
+
 GROUPS = {
-    "Nifty 500 (All)": "ind_nifty500list", "Nifty 50 (Large cap)": "ind_nifty50list",
-    "Nifty Next 50": "ind_niftynext50list", "Nifty 100": "ind_nifty100list",
-    "Nifty 200": "ind_nifty200list", "Nifty Midcap 150": "ind_niftymidcap150list",
-    "Nifty Smallcap 250": "ind_niftysmallcap250list", "Nifty Bank": "ind_niftybanklist",
-    "Nifty IT": "ind_niftyitlist", "Nifty Auto": "ind_niftyautolist",
-    "Nifty Pharma": "ind_niftypharmalist", "Nifty FMCG": "ind_niftyfmcglist",
-    "Nifty Metal": "ind_niftymetallist", "Nifty Energy": "ind_niftyenergylist",
-    "Nifty Realty": "ind_niftyrealtylist",
+    "Nifty 50 (Large cap)": _NIFTY50, "Nifty Next 50": _NEXT50,
+    "Nifty Bank": _BANK, "Nifty IT": _IT, "Nifty Auto": _AUTO,
+    "Nifty Pharma": _PHARMA, "Nifty FMCG": _FMCG, "Nifty Metal": _METAL,
+    "Nifty Energy": _ENERGY, "Nifty Realty": _REALTY,
 }
 TF = {"15m": ("15m", "30d"), "1h": ("1h", "6mo"), "4h": ("1h", "6mo"), "1d": ("1d", "2y")}
 _cache = {}
@@ -29,13 +134,9 @@ def cached(key, ttl, fn):
 
 
 def load_group(name):
-    def go():
-        url = f"https://niftyindices.com/IndexConstituent/{GROUPS[name]}.csv"
-        r = requests.get(url, headers=UA, timeout=20)
-        r.raise_for_status()
-        df = pd.read_csv(io.StringIO(r.text))
-        return df[["Company Name", "Industry", "Symbol"]]
-    return cached("g:" + name, 86400, go)
+    d = GROUPS[name]
+    rows = [(nm, ind, sym) for sym, (nm, ind) in d.items()]
+    return pd.DataFrame(rows, columns=["Company Name", "Industry", "Symbol"])
 
 
 def analyze(d, n):
@@ -102,17 +203,14 @@ def guard():
 
 @app.route("/api/meta")
 def meta():
-    try:
-        inds = sorted(load_group("Nifty 500 (All)")["Industry"].dropna().unique().tolist())
-    except Exception:
-        inds = []
+    inds = sorted({v[1] for g in GROUPS.values() for v in g.values()})
     return jsonify(groups=list(GROUPS), industries=inds)
 
 
 @app.route("/api/scan")
 def scan():
     a = request.args
-    ex, grp, ind = a.get("exchange", "NSE"), a.get("group", "Nifty 500 (All)"), a.get("industry", "")
+    ex, grp, ind = a.get("exchange", "NSE"), a.get("group", "Nifty 50 (Large cap)"), a.get("industry", "")
     tf, want = a.get("tf", "1d"), a.get("type", "both")
     within, n = int(a.get("within", 3)), int(a.get("swing", 3))
     try:
