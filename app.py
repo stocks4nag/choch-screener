@@ -267,6 +267,25 @@ def scan():
     return jsonify(rows=rows, scanned=len(data), total=len(names))
 
 
+@app.route("/api/candles")
+def candles():
+    a = request.args
+    sym, ex, tf = (a.get("symbol") or "").strip().upper(), a.get("exchange", "NSE"), a.get("tf", "1d")
+    if not sym:
+        return jsonify(error="Missing symbol."), 400
+    sfx = ".NS" if ex == "NSE" else ".BO"
+    ticker = sym + sfx
+    key = f"cnd:{ticker}:{tf}"
+    data = cached(key, 120, lambda: fetch([ticker], tf))
+    d = data.get(ticker)
+    if d is None or len(d) == 0:
+        return jsonify(error="No price data available for this symbol/timeframe."), 404
+    rows = [dict(time=int(pd.Timestamp(idx).timestamp()), open=round(float(o), 2), high=round(float(h), 2),
+                 low=round(float(l), 2), close=round(float(c), 2))
+            for idx, o, h, l, c in zip(d.index, d["Open"], d["High"], d["Low"], d["Close"])]
+    return jsonify(candles=rows)
+
+
 @app.route("/")
 def home():
     return Response(PAGE, mimetype="text/html")
@@ -476,23 +495,32 @@ function selectRow(i){
       <div><div class="l">Event Bar Time</div><div class="v" style="font-size:12px">${x.time}</div></div>
       <div><div class="l">Industry</div><div class="v" style="font-size:12px">${x.industry}</div></div>
     </div>
-    <p class="hint">Last Close is the most recent completed candle (Yahoo data, ~15 min delayed) — not a live tick. The chart on the right always opens on the Daily interval — TradingView's free embed doesn't have rights to serve intraday NSE/BSE data on external sites. You can try switching resolution using the toolbar inside the chart itself; if that also fails, use the link below the chart to open it on TradingView.com directly. Look for price near the Broken Level above, around the Event Bar Time, to see the CHoCH visually.</p>`;
-  loadTV(x.symbol);
+    <p class="hint">Last Close is the most recent completed candle (Yahoo data, ~15 min delayed) — not a live tick. TradingView's free widget is not licensed to show NSE/BSE data on outside websites at all (confirmed directly from TradingView's own docs), so the chart below is drawn from the same price data your scan used, with the broken level marked as a dashed line — look for price crossing that line around the Event Bar Time. Use the link under the chart if you want to inspect the same stock on TradingView.com itself.</p>`;
+  loadChart(x.symbol,$('exSel').value,$('tf').value,x.level);
 }
 
-function loadTV(symbol){
-  $('chartWrap').innerHTML='<div id="tvc" style="height:calc(100% - 26px);width:100%"></div><div style="text-align:right;padding:4px 6px"><a href="https://www.tradingview.com/chart/?symbol=NSE:'+encodeURIComponent(symbol)+'" target="_blank" style="color:var(--ac);font-size:11.5px;text-decoration:none">Open full chart on TradingView.com ↗</a></div>';
-  function mk(){
-    // Always open on the Daily interval: TradingView's free embed widget does not
-    // have redistribution rights for intraday NSE/BSE data on external sites, only
-    // end-of-day. You can still try switching resolution using the toolbar inside
-    // the chart itself.
-    new TradingView.widget({autosize:true,symbol:'NSE:'+symbol,interval:'D',
-      timezone:'Asia/Kolkata',theme:'dark',style:'1',locale:'in',toolbar_bg:'#000000',
-      enable_publishing:false,hide_top_toolbar:false,withdateranges:true,container_id:'tvc'});
+let CHART=null, SERIES=null;
+function loadChart(symbol,exchange,tf,level){
+  $('chartWrap').innerHTML='<div id="cchart" style="height:calc(100% - 26px);width:100%"></div><div style="text-align:right;padding:4px 6px"><a href="https://www.tradingview.com/chart/?symbol=NSE:'+encodeURIComponent(symbol)+'" target="_blank" style="color:var(--ac);font-size:11.5px;text-decoration:none">Inspect on TradingView.com ↗</a></div>';
+  function draw(){
+    const el=$('cchart');
+    CHART=LightweightCharts.createChart(el,{
+      layout:{background:{color:'#000'},textColor:'#eef0e8'},
+      grid:{vertLines:{color:'#181818'},horzLines:{color:'#181818'}},
+      timeScale:{timeVisible:true,borderColor:'#232323'},
+      rightPriceScale:{borderColor:'#232323'},
+    });
+    SERIES=CHART.addCandlestickSeries({upColor:'#1fc25a',downColor:'#ff4d4d',borderVisible:false,wickUpColor:'#1fc25a',wickDownColor:'#ff4d4d'});
+    new ResizeObserver(()=>CHART.applyOptions({width:el.clientWidth,height:el.clientHeight})).observe(el);
+    fetch('/api/candles?'+new URLSearchParams({symbol,exchange,tf}),{headers:H()}).then(r=>r.json()).then(d=>{
+      if(d.error){el.innerHTML='<div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--mu);font-size:13px;padding:20px;text-align:center">'+d.error+'</div>';return}
+      SERIES.setData(d.candles);
+      SERIES.createPriceLine({price:level,color:'var(--ac)',lineWidth:2,lineStyle:2,axisLabelVisible:true,title:'Broken level'});
+      CHART.timeScale().fitContent();
+    }).catch(e=>{el.innerHTML='<div style="padding:20px;color:var(--mu);font-size:13px">Chart failed to load: '+e+'</div>'});
   }
-  if(window.TradingView){mk();}
-  else{const s=document.createElement('script');s.src='https://s3.tradingview.com/tv.js';s.onload=mk;document.body.appendChild(s);}
+  if(window.LightweightCharts){draw();}
+  else{const s=document.createElement('script');s.src='https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js';s.onload=draw;document.body.appendChild(s);}
 }
 </script></body></html>"""
 
