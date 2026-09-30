@@ -184,6 +184,20 @@ def analyze(d, n):
                 bos_ago=t - b, close=round(float(c[-1]), 2), time=str(idx[t])[:16])
 
 
+def swing_points(d, n):
+    """All confirmed swing highs/lows using the same pivot rule as analyze() -
+    a bar whose High/Low is the max/min of the n bars on each side of it."""
+    h, l = d["High"].values, d["Low"].values
+    idx = d.index
+    out = []
+    for t in range(n, len(h) - n):
+        if h[t] == max(h[t - n:t + n + 1]):
+            out.append({"time": int(pd.Timestamp(idx[t]).timestamp()), "price": round(float(h[t]), 2), "type": "H"})
+        if l[t] == min(l[t - n:t + n + 1]):
+            out.append({"time": int(pd.Timestamp(idx[t]).timestamp()), "price": round(float(l[t]), 2), "type": "L"})
+    return sorted(out, key=lambda r: r["time"])
+
+
 def fetch(tickers, tf):
     interval, period = TF[tf]
     out = {}
@@ -275,6 +289,7 @@ def scan():
 def candles():
     a = request.args
     sym, ex, tf = (a.get("symbol") or "").strip().upper(), a.get("exchange", "NSE"), a.get("tf", "1d")
+    n = int(a.get("swing", 3))
     if not sym:
         return jsonify(error="Missing symbol."), 400
     sfx = ".NS" if ex == "NSE" else ".BO"
@@ -287,7 +302,7 @@ def candles():
     rows = [dict(time=int(pd.Timestamp(idx).timestamp()), open=round(float(o), 2), high=round(float(h), 2),
                  low=round(float(l), 2), close=round(float(c), 2))
             for idx, o, h, l, c in zip(d.index, d["Open"], d["High"], d["Low"], d["Close"])]
-    return jsonify(candles=rows)
+    return jsonify(candles=rows, swings=swing_points(d, n))
 
 
 @app.route("/")
@@ -336,7 +351,9 @@ button.primary:disabled{opacity:.45;cursor:default}
 .info-grid div{background:#000;border:1px solid var(--bd);border-radius:6px;padding:8px 10px}
 .info-grid .l{font-size:10.5px;color:var(--mu);text-transform:uppercase;letter-spacing:.3px}
 .info-grid .v{font-size:15px;font-weight:700;margin-top:2px}
-#chartWrap{flex:1;border:1px solid var(--bd);border-radius:10px;overflow:hidden;background:#000;min-height:0}
+#chartWrap{flex:1;border:1px solid var(--bd);border-radius:10px;overflow:hidden;background:#000;min-height:0;padding:10px;display:flex;flex-direction:column}
+.toolbtn{padding:5px 10px;border-radius:6px;border:1px solid var(--bd);background:#111;color:var(--tx);font-size:12px;cursor:pointer}
+.toolbtn:hover{border-color:var(--ac)}
 #chartPlaceholder{height:100%;display:flex;align-items:center;justify-content:center;color:var(--mu);font-size:13px;text-align:center;padding:20px}
 .keyw{margin-top:10px}
 </style></head><body>
@@ -492,12 +509,44 @@ function selectRow(i){
       <div><div class="l">Industry</div><div class="v" style="font-size:12px">${x.industry}</div></div>
     </div>
     <p class="hint">Last Close is the most recent completed candle (Yahoo data, ~15 min delayed) — not a live tick. TradingView's free widget is not licensed to show NSE data on outside websites at all (confirmed directly from TradingView's own docs), so the chart below is drawn from the same price data your scan used, with the broken level marked as a dashed line — look for price crossing that line around the Event Bar Time. Use the link under the chart if you want to inspect the same stock on TradingView.com itself.</p>`;
-  loadChart(x.symbol,'NSE',$('tf').value,x.level);
+  loadChart(x.symbol,'NSE',$('tf').value,x.level,$('swing').value);
 }
 
-let CHART=null, SERIES=null;
-function loadChart(symbol,exchange,tf,level){
-  $('chartWrap').innerHTML='<div id="cchart" style="height:calc(100% - 26px);width:100%"></div><div style="text-align:right;padding:4px 6px"><a href="https://www.tradingview.com/chart/?symbol=NSE:'+encodeURIComponent(symbol)+'" target="_blank" style="color:var(--ac);font-size:11.5px;text-decoration:none">Inspect on TradingView.com ↗</a></div>';
+const TF_LABEL={'15m':'15 min','1h':'1 hour','4h':'4 hour','1d':'Daily'};
+let CHART=null, SERIES=null, ZIG=null, DRAWINGS=[], DRAW_MODE=false, PENDING=null;
+
+function redrawOverlay(){
+  const canvas=document.getElementById('ov'); if(!canvas||!CHART||!SERIES) return;
+  const ctx=canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.strokeStyle='#ff9f1c';ctx.lineWidth=1.5;
+  DRAWINGS.forEach(dr=>{
+    const x1=CHART.timeScale().timeToCoordinate(dr.p1.time), y1=SERIES.priceToCoordinate(dr.p1.price);
+    const x2=CHART.timeScale().timeToCoordinate(dr.p2.time), y2=SERIES.priceToCoordinate(dr.p2.price);
+    if(x1==null||x2==null||y1==null||y2==null) return;
+    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+  });
+}
+function zoom(factor){
+  if(!CHART) return;
+  const ts=CHART.timeScale(); const r=ts.getVisibleLogicalRange(); if(!r) return;
+  const c=(r.from+r.to)/2, half=(r.to-r.from)/2*factor;
+  ts.setVisibleLogicalRange({from:c-half,to:c+half});
+  redrawOverlay();
+}
+
+function loadChart(symbol,exchange,tf,level,swing){
+  DRAWINGS=[];PENDING=null;DRAW_MODE=false;
+  $('chartWrap').innerHTML=`
+    <div style="display:flex;gap:6px;padding:0 0 8px;flex-wrap:wrap">
+      <button class="toolbtn" id="zIn" title="Zoom in">+</button>
+      <button class="toolbtn" id="zOut" title="Zoom out">−</button>
+      <button class="toolbtn" id="zFit" title="Fit all candles">Fit</button>
+      <button class="toolbtn" id="drawBtn" title="Click two points on the chart to draw a trendline">✎ Draw line</button>
+      <button class="toolbtn" id="clearBtn" title="Remove drawn lines">Clear lines</button>
+    </div>
+    <div id="cchart" style="height:calc(100% - 62px);width:100%;position:relative"></div>
+    <div style="text-align:right;padding:4px 6px"><a href="https://www.tradingview.com/chart/?symbol=NSE:${encodeURIComponent(symbol)}" target="_blank" style="color:var(--ac);font-size:11.5px;text-decoration:none">Inspect on TradingView.com ↗</a></div>`;
   const el=$('cchart');
   function fail(msg){el.innerHTML='<div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--mu);font-size:13px;padding:20px;text-align:center">'+msg+'</div>'}
   function draw(){
@@ -508,18 +557,55 @@ function loadChart(symbol,exchange,tf,level){
         grid:{vertLines:{color:'#181818'},horzLines:{color:'#181818'}},
         timeScale:{timeVisible:true,borderColor:'#232323'},
         rightPriceScale:{borderColor:'#232323'},
+        watermark:{visible:true,text:symbol+'  ·  '+(TF_LABEL[tf]||tf)+'\nCHoCH Screener',color:'rgba(255,255,255,0.10)',fontSize:22,horzAlign:'center',vertAlign:'center'},
       });
       if(typeof CHART.addCandlestickSeries!=='function'){fail('Chart library version mismatch (addCandlestickSeries missing). Try a hard refresh (Ctrl/Cmd+Shift+R).');return}
       SERIES=CHART.addCandlestickSeries({upColor:'#1fc25a',downColor:'#ff4d4d',borderVisible:false,wickUpColor:'#1fc25a',wickDownColor:'#ff4d4d'});
-      new ResizeObserver(()=>{try{CHART.applyOptions({width:el.clientWidth,height:el.clientHeight})}catch(e){}}).observe(el);
+      const ov=document.createElement('canvas');
+      ov.id='ov';ov.style.position='absolute';ov.style.top='0';ov.style.left='0';ov.style.pointerEvents='none';
+      el.appendChild(ov);
+      function sizeAll(){
+        try{CHART.applyOptions({width:el.clientWidth,height:el.clientHeight})}catch(e){}
+        ov.width=el.clientWidth;ov.height=el.clientHeight;
+        redrawOverlay();
+      }
+      new ResizeObserver(sizeAll).observe(el);
+      sizeAll();
+      CHART.timeScale().subscribeVisibleTimeRangeChange(redrawOverlay);
+      ov.addEventListener('click',e=>{
+        if(!DRAW_MODE) return;
+        const rect=ov.getBoundingClientRect();
+        const time=CHART.timeScale().coordinateToTime(e.clientX-rect.left);
+        const price=SERIES.coordinateToPrice(e.clientY-rect.top);
+        if(time==null||price==null) return;
+        if(!PENDING){PENDING={time,price}}
+        else{DRAWINGS.push({p1:PENDING,p2:{time,price}});PENDING=null;redrawOverlay()}
+      });
+      $('zIn').onclick=()=>zoom(0.7);
+      $('zOut').onclick=()=>zoom(1.4);
+      $('zFit').onclick=()=>{CHART.timeScale().fitContent();redrawOverlay()};
+      $('drawBtn').onclick=()=>{
+        DRAW_MODE=!DRAW_MODE;PENDING=null;
+        ov.style.pointerEvents=DRAW_MODE?'auto':'none';
+        $('drawBtn').style.background=DRAW_MODE?'var(--ac)':'';
+        $('drawBtn').style.color=DRAW_MODE?'#000':'';
+      };
+      $('clearBtn').onclick=()=>{DRAWINGS=[];PENDING=null;redrawOverlay()};
     }catch(e){fail('Chart failed to initialize: '+e);return}
-    fetch('/api/candles?'+new URLSearchParams({symbol,exchange,tf}),{headers:H()}).then(r=>r.json()).then(d=>{
+    fetch('/api/candles?'+new URLSearchParams({symbol,exchange,tf,swing}),{headers:H()}).then(r=>r.json()).then(d=>{
       if(d.error){fail(d.error);return}
       if(!d.candles||!d.candles.length){fail('No candle data returned for this symbol/timeframe.');return}
       try{
         SERIES.setData(d.candles);
         SERIES.createPriceLine({price:level,color:'#ff9f1c',lineWidth:2,lineStyle:2,axisLabelVisible:true,title:'Broken level'});
+        if(d.swings&&d.swings.length){
+          SERIES.setMarkers(d.swings.map(s=>({time:s.time,position:s.type==='H'?'aboveBar':'belowBar',
+            color:s.type==='H'?'#ff4d4d':'#1fc25a',shape:s.type==='H'?'arrowDown':'arrowUp',text:s.type})));
+          ZIG=CHART.addLineSeries({color:'#5b6470',lineWidth:1,lastValueVisible:false,priceLineVisible:false});
+          ZIG.setData(d.swings.map(s=>({time:s.time,value:s.price})));
+        }
         CHART.timeScale().fitContent();
+        redrawOverlay();
       }catch(e){fail('Chart failed to render: '+e)}
     }).catch(e=>fail('Data request failed: '+e));
   }
