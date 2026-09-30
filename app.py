@@ -127,7 +127,7 @@ GROUPS = {
     "Nifty Bank": _BANK, "Nifty IT": _IT, "Nifty Auto": _AUTO,
     "Nifty Pharma": _PHARMA, "Nifty FMCG": _FMCG, "Nifty Metal": _METAL,
     "Nifty Energy": _ENERGY, "Nifty Realty": _REALTY,
-    "Sensex 30 (BSE)": _SENSEX30,
+    "Sensex 30 (Large cap)": _SENSEX30,
 }
 CUSTOM_LABEL = "Custom (paste your own symbols)"
 NIFTY500_LABEL = "Nifty 500 (paste once, saved in your browser)"
@@ -194,9 +194,13 @@ def fetch(tickers, tf):
                                auto_adjust=False, threads=True, progress=False)
         except Exception:
             continue
+        # yfinance's column shape depends on the ACTUAL data returned, not on how many
+        # tickers were requested (a chunk of 1 can still come back multi-indexed) - so we
+        # check the real structure instead of assuming based on len(chunk).
+        multi = isinstance(data.columns, pd.MultiIndex)
         for t in chunk:
             try:
-                d = data[t] if len(chunk) > 1 else data
+                d = data[t] if multi else data
                 d = d.dropna(subset=["Close"])
                 if tf == "4h":
                     d = d.resample("4h").agg({"Open": "first", "High": "max", "Low": "min",
@@ -340,20 +344,15 @@ button.primary:disabled{opacity:.45;cursor:default}
   <div class="left">
     <div class="filters">
       <h1>CHo<span>CH</span> Screener</h1>
-      <p class="sub">Structure-break scanner for NSE &amp; BSE</p>
+      <p class="sub">Structure-break scanner for NSE stocks</p>
 
-      <div class="step" id="s_ex">
-        <label>1. Exchange</label>
-        <select id="exSel"><option value="" disabled selected>Select exchange</option><option>NSE</option><option>BSE</option></select>
-      </div>
-
-      <div class="step hidden" id="s_grp">
-        <label>2. Segment / Index</label>
+      <div class="step" id="s_grp">
+        <label>1. Segment / Index</label>
         <select id="grpSel"><option value="" disabled selected>Select segment</option></select>
       </div>
 
       <div class="step hidden" id="s_ind">
-        <label>3. Sector / Industry</label>
+        <label>2. Sector / Industry</label>
         <select id="indSel"><option value="">All industries</option></select>
         <div id="custwrap" class="hidden">
           <textarea id="custom" rows="4" placeholder="RELIANCE, TCS, INFY ...&#10;or paste Symbol,Company Name,Industry rows"></textarea>
@@ -363,7 +362,7 @@ button.primary:disabled{opacity:.45;cursor:default}
       </div>
 
       <div class="step hidden" id="s_final">
-        <label>4. Timeframe</label>
+        <label>3. Timeframe</label>
         <select id="tf"><option value="15m">15 min</option><option value="1h">1 hour</option><option value="4h">4 hour</option><option value="1d" selected>Daily</option></select>
         <div class="row2" style="margin-top:10px">
           <div><label>CHoCH type</label><select id="type"><option value="both">Both</option><option value="bull">Bullish</option><option value="bear">Bearish</option></select></div>
@@ -400,21 +399,18 @@ $('key').value=localStorage.k||'';
 function show(id){$(id).classList.remove('hidden')}
 function hide(id){$(id).classList.add('hidden')}
 function resetFrom(step){
-  if(step<=1){hide('s_grp');$('grpSel').selectedIndex=0}
-  if(step<=2){hide('s_ind')}
-  if(step<=3){hide('s_final')}
+  if(step<=1){hide('s_ind')}
+  if(step<=2){hide('s_final')}
   $('resList').innerHTML='<p class="emptynote">Results will appear here after you scan.</p>';
   $('st').textContent='';
   clearChart();
 }
 
-$('exSel').onchange=()=>{resetFrom(1);show('s_grp')};
-
 function pasteKey(g){return 'paste:'+g}
 
 $('grpSel').onchange=()=>{
   const g=$('grpSel').value;
-  resetFrom(2);show('s_ind');
+  resetFrom(1);show('s_ind');
   if(g===META.custom_label||g===META.nifty500_label){
     hide_ind_select();show('custwrap');show('s_final');
     $('custom').value=localStorage.getItem(pasteKey(g))||'';
@@ -450,7 +446,7 @@ $('go').onclick=async()=>{
   $('go').disabled=true;$('st').textContent='Scanning… first run can take up to a minute.';
   $('resList').innerHTML='';clearChart();
   const isPaste=($('grpSel').value===META.custom_label||$('grpSel').value===META.nifty500_label);
-  const q=new URLSearchParams({exchange:$('exSel').value,group:$('grpSel').value,
+  const q=new URLSearchParams({exchange:'NSE',group:$('grpSel').value,
     industry:isPaste?$('customInd').value:$('indSel').value,
     tf:$('tf').value,type:$('type').value,within:$('within').value,swing:$('swing').value,symbols:$('custom').value});
   try{
@@ -495,8 +491,8 @@ function selectRow(i){
       <div><div class="l">Event Bar Time</div><div class="v" style="font-size:12px">${x.time}</div></div>
       <div><div class="l">Industry</div><div class="v" style="font-size:12px">${x.industry}</div></div>
     </div>
-    <p class="hint">Last Close is the most recent completed candle (Yahoo data, ~15 min delayed) — not a live tick. TradingView's free widget is not licensed to show NSE/BSE data on outside websites at all (confirmed directly from TradingView's own docs), so the chart below is drawn from the same price data your scan used, with the broken level marked as a dashed line — look for price crossing that line around the Event Bar Time. Use the link under the chart if you want to inspect the same stock on TradingView.com itself.</p>`;
-  loadChart(x.symbol,$('exSel').value,$('tf').value,x.level);
+    <p class="hint">Last Close is the most recent completed candle (Yahoo data, ~15 min delayed) — not a live tick. TradingView's free widget is not licensed to show NSE data on outside websites at all (confirmed directly from TradingView's own docs), so the chart below is drawn from the same price data your scan used, with the broken level marked as a dashed line — look for price crossing that line around the Event Bar Time. Use the link under the chart if you want to inspect the same stock on TradingView.com itself.</p>`;
+  loadChart(x.symbol,'NSE',$('tf').value,x.level);
 }
 
 let CHART=null, SERIES=null;
