@@ -476,15 +476,18 @@ function selectRow(i){
       <div><div class="l">Event Bar Time</div><div class="v" style="font-size:12px">${x.time}</div></div>
       <div><div class="l">Industry</div><div class="v" style="font-size:12px">${x.industry}</div></div>
     </div>
-    <p class="hint">Last Close is the most recent completed candle (Yahoo data, ~15 min delayed) — not a live tick. The chart on the right always shows the NSE listing for reliability, even if you scanned BSE — TradingView's BSE tickers often use numeric codes we don't have mapped. Look for price near the Broken Level above, around the Event Bar Time, to see the CHoCH visually. If the chart shows "symbol only available on TradingView", use the link below it to search manually.</p>`;
-  loadTV(x.symbol,$('tf').value);
+    <p class="hint">Last Close is the most recent completed candle (Yahoo data, ~15 min delayed) — not a live tick. The chart on the right always opens on the Daily interval — TradingView's free embed doesn't have rights to serve intraday NSE/BSE data on external sites. You can try switching resolution using the toolbar inside the chart itself; if that also fails, use the link below the chart to open it on TradingView.com directly. Look for price near the Broken Level above, around the Event Bar Time, to see the CHoCH visually.</p>`;
+  loadTV(x.symbol);
 }
 
-function loadTV(symbol,tf){
+function loadTV(symbol){
   $('chartWrap').innerHTML='<div id="tvc" style="height:calc(100% - 26px);width:100%"></div><div style="text-align:right;padding:4px 6px"><a href="https://www.tradingview.com/chart/?symbol=NSE:'+encodeURIComponent(symbol)+'" target="_blank" style="color:var(--ac);font-size:11.5px;text-decoration:none">Open full chart on TradingView.com ↗</a></div>';
-  const ivmap={'15m':'15','1h':'60','4h':'240','1d':'D'};
   function mk(){
-    new TradingView.widget({autosize:true,symbol:'NSE:'+symbol,interval:ivmap[tf]||'D',
+    // Always open on the Daily interval: TradingView's free embed widget does not
+    // have redistribution rights for intraday NSE/BSE data on external sites, only
+    // end-of-day. You can still try switching resolution using the toolbar inside
+    // the chart itself.
+    new TradingView.widget({autosize:true,symbol:'NSE:'+symbol,interval:'D',
       timezone:'Asia/Kolkata',theme:'dark',style:'1',locale:'in',toolbar_bg:'#000000',
       enable_publishing:false,hide_top_toolbar:false,withdateranges:true,container_id:'tvc'});
   }
