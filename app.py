@@ -130,6 +130,8 @@ GROUPS = {
     "Sensex 30 (BSE)": _SENSEX30,
 }
 CUSTOM_LABEL = "Custom (paste your own symbols)"
+NIFTY500_LABEL = "Nifty 500 (paste once, saved in your browser)"
+PASTE_GROUPS = {CUSTOM_LABEL, NIFTY500_LABEL}
 TF = {"15m": ("15m", "30d"), "1h": ("1h", "6mo"), "4h": ("1h", "6mo"), "1d": ("1d", "2y")}
 _cache = {}
 
@@ -215,8 +217,8 @@ def guard():
 def meta():
     gi = {g: sorted({v[1] for v in d.values()}) for g, d in GROUPS.items()}
     inds = sorted({v[1] for g in GROUPS.values() for v in g.values()})
-    return jsonify(groups=list(GROUPS) + [CUSTOM_LABEL], industries=inds,
-                   group_industries=gi, custom_label=CUSTOM_LABEL)
+    return jsonify(groups=list(GROUPS) + [NIFTY500_LABEL, CUSTOM_LABEL], industries=inds,
+                   group_industries=gi, custom_label=CUSTOM_LABEL, nifty500_label=NIFTY500_LABEL)
 
 
 @app.route("/api/scan")
@@ -225,12 +227,25 @@ def scan():
     ex, grp, ind = a.get("exchange", "NSE"), a.get("group", "Nifty 50 (Large cap)"), a.get("industry", "")
     tf, want = a.get("tf", "1d"), a.get("type", "both")
     within, n = int(a.get("within", 3)), int(a.get("swing", 3))
-    if grp == CUSTOM_LABEL:
+    if grp in PASTE_GROUPS:
         raw = a.get("symbols", "")
-        syms = sorted({s.strip().upper() for s in raw.replace(",", "\n").split("\n") if s.strip()})
+        syms, names_, inds_ = [], [], []
+        for line in raw.replace("\r", "").split("\n"):
+            line = line.strip()
+            if not line: continue
+            parts = [p.strip() for p in (line.split("\t") if "\t" in line else line.split(","))]
+            sym = parts[0].upper().strip()
+            # strip common suffixes people accidentally paste (series/exchange tags)
+            for bad in ("-EQ", "-BE", ".NS", ".BO"):
+                if sym.endswith(bad): sym = sym[: -len(bad)]
+            if not sym or sym in ("SYMBOL", "NSE SYMBOL"): continue
+            syms.append(sym)
+            names_.append(parts[1] if len(parts) > 1 and parts[1] else sym)
+            inds_.append(parts[2] if len(parts) > 2 and parts[2] else "Custom")
         if not syms:
             return jsonify(error="Paste at least one symbol first."), 400
-        u = pd.DataFrame({"Symbol": syms, "Company Name": syms, "Industry": ["Custom"] * len(syms)})
+        u = pd.DataFrame({"Symbol": syms, "Company Name": names_, "Industry": inds_}).drop_duplicates("Symbol")
+        if ind: u = u[u["Industry"] == ind]
     else:
         try:
             u = load_group(grp)
@@ -322,8 +337,9 @@ button.primary:disabled{opacity:.45;cursor:default}
         <label>3. Sector / Industry</label>
         <select id="indSel"><option value="">All industries</option></select>
         <div id="custwrap" class="hidden">
-          <textarea id="custom" rows="3" placeholder="RELIANCE, TCS, INFY ..."></textarea>
-          <p class="hint">Get the full Nifty 500 list: open <a href="https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv" target="_blank">this link</a> in your own browser (it blocks bots, not you), open the CSV in Excel, copy the Symbol column, paste it above.</p>
+          <textarea id="custom" rows="4" placeholder="RELIANCE, TCS, INFY ...&#10;or paste Symbol,Company Name,Industry rows"></textarea>
+          <input id="customInd" placeholder="Industry filter (optional, only works if you pasted 3 columns)" style="margin-top:8px">
+          <p class="hint" id="pasteHint"></p>
         </div>
       </div>
 
@@ -353,7 +369,7 @@ button.primary:disabled{opacity:.45;cursor:default}
 <script>
 const $=i=>document.getElementById(i);
 const H=()=>({'X-Key':$('key').value||localStorage.k||''});
-let META={groups:[],industries:[],group_industries:{},custom_label:'Custom'};
+let META={groups:[],industries:[],group_industries:{},custom_label:'Custom',nifty500_label:'Nifty500'};
 let LAST_ROWS=[];
 
 fetch('/api/meta').then(r=>r.json()).then(m=>{
@@ -375,11 +391,19 @@ function resetFrom(step){
 
 $('exSel').onchange=()=>{resetFrom(1);show('s_grp')};
 
+function pasteKey(g){return 'paste:'+g}
+
 $('grpSel').onchange=()=>{
   const g=$('grpSel').value;
   resetFrom(2);show('s_ind');
-  if(g===META.custom_label){
+  if(g===META.custom_label||g===META.nifty500_label){
     hide_ind_select();show('custwrap');show('s_final');
+    $('custom').value=localStorage.getItem(pasteKey(g))||'';
+    if(g===META.nifty500_label){
+      $('pasteHint').innerHTML='Open <a href="https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv" target="_blank">this link</a> in your own browser (it blocks bots, not you), open the CSV in Excel, select the Symbol, Company Name and Industry columns, copy, and paste them above. Saved automatically in this browser — you only need to do this once.';
+    }else{
+      $('pasteHint').textContent='Paste symbols one per line or comma-separated. Optionally add ",Company Name,Industry" per line for sector filtering.';
+    }
   }else{
     show_ind_select();hide('custwrap');
     $('indSel').innerHTML='<option value="">All industries</option>';
@@ -390,6 +414,11 @@ function hide_ind_select(){$('indSel').classList.add('hidden')}
 function show_ind_select(){$('indSel').classList.remove('hidden')}
 
 $('indSel').onchange=()=>{show('s_final')};
+$('custom').oninput=()=>{
+  const g=$('grpSel').value;
+  if(g===META.custom_label||g===META.nifty500_label){localStorage.setItem(pasteKey(g),$('custom').value)}
+  show('s_final');
+};
 
 function clearChart(){
   $('infoCard').classList.remove('show');$('infoCard').innerHTML='';
@@ -401,7 +430,9 @@ $('go').onclick=async()=>{
   localStorage.k=$('key').value;
   $('go').disabled=true;$('st').textContent='Scanning… first run can take up to a minute.';
   $('resList').innerHTML='';clearChart();
-  const q=new URLSearchParams({exchange:$('exSel').value,group:$('grpSel').value,industry:$('indSel').value,
+  const isPaste=($('grpSel').value===META.custom_label||$('grpSel').value===META.nifty500_label);
+  const q=new URLSearchParams({exchange:$('exSel').value,group:$('grpSel').value,
+    industry:isPaste?$('customInd').value:$('indSel').value,
     tf:$('tf').value,type:$('type').value,within:$('within').value,swing:$('swing').value,symbols:$('custom').value});
   try{
     const r=await fetch('/api/scan?'+q,{headers:H()});const d=await r.json();
@@ -445,15 +476,15 @@ function selectRow(i){
       <div><div class="l">Event Bar Time</div><div class="v" style="font-size:12px">${x.time}</div></div>
       <div><div class="l">Industry</div><div class="v" style="font-size:12px">${x.industry}</div></div>
     </div>
-    <p class="hint">Last Close is the most recent completed candle (Yahoo data, ~15 min delayed) — not a live tick. The TradingView chart on the right is the real live chart; look for price near the Broken Level above around the Event Bar Time to see the CHoCH visually.</p>`;
-  loadTV(x.symbol,$('exSel').value,$('tf').value);
+    <p class="hint">Last Close is the most recent completed candle (Yahoo data, ~15 min delayed) — not a live tick. The chart on the right always shows the NSE listing for reliability, even if you scanned BSE — TradingView's BSE tickers often use numeric codes we don't have mapped. Look for price near the Broken Level above, around the Event Bar Time, to see the CHoCH visually. If the chart shows "symbol only available on TradingView", use the link below it to search manually.</p>`;
+  loadTV(x.symbol,$('tf').value);
 }
 
-function loadTV(symbol,exchange,tf){
-  $('chartWrap').innerHTML='<div id="tvc" style="height:100%;width:100%"></div>';
+function loadTV(symbol,tf){
+  $('chartWrap').innerHTML='<div id="tvc" style="height:calc(100% - 26px);width:100%"></div><div style="text-align:right;padding:4px 6px"><a href="https://www.tradingview.com/chart/?symbol=NSE:'+encodeURIComponent(symbol)+'" target="_blank" style="color:var(--ac);font-size:11.5px;text-decoration:none">Open full chart on TradingView.com ↗</a></div>';
   const ivmap={'15m':'15','1h':'60','4h':'240','1d':'D'};
   function mk(){
-    new TradingView.widget({autosize:true,symbol:exchange+':'+symbol,interval:ivmap[tf]||'D',
+    new TradingView.widget({autosize:true,symbol:'NSE:'+symbol,interval:ivmap[tf]||'D',
       timezone:'Asia/Kolkata',theme:'dark',style:'1',locale:'in',toolbar_bg:'#000000',
       enable_publishing:false,hide_top_toolbar:false,withdateranges:true,container_id:'tvc'});
   }
