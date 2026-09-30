@@ -513,7 +513,9 @@ function selectRow(i){
 }
 
 const TF_LABEL={'15m':'15 min','1h':'1 hour','4h':'4 hour','1d':'Daily'};
-let CHART=null, SERIES=null, ZIG=null, DRAWINGS=[], DRAW_MODE=false, PENDING=null;
+let CHART=null, SERIES=null, DRAWINGS=[], DRAW_MODE=false, PENDING=null;
+let SHOW_SWINGS=true, SHOW_WATERMARK=true, SWING_LINES=[], RECENT_SWINGS=null;
+let CUR_SYMBOL='', CUR_TF='';
 
 function redrawOverlay(){
   const canvas=document.getElementById('ov'); if(!canvas||!CHART||!SERIES) return;
@@ -534,9 +536,34 @@ function zoom(factor){
   ts.setVisibleLogicalRange({from:c-half,to:c+half});
   redrawOverlay();
 }
+function applyWatermark(){
+  if(!CHART) return;
+  CHART.applyOptions({watermark:{visible:SHOW_WATERMARK,text:CUR_SYMBOL+'  ·  '+(TF_LABEL[CUR_TF]||CUR_TF)+'\nCHoCH Screener',
+    color:'rgba(255,255,255,0.10)',fontSize:22,horzAlign:'center',vertAlign:'center'}});
+}
+function applySwingLines(){
+  if(!SERIES) return;
+  SWING_LINES.forEach(l=>{try{SERIES.removePriceLine(l)}catch(e){}});
+  SWING_LINES=[];
+  if(SHOW_SWINGS&&RECENT_SWINGS){
+    if(RECENT_SWINGS.H) SWING_LINES.push(SERIES.createPriceLine({price:RECENT_SWINGS.H.price,color:'#ff4d4d',lineWidth:1,lineStyle:3,axisLabelVisible:true,title:'Recent Swing High'}));
+    if(RECENT_SWINGS.L) SWING_LINES.push(SERIES.createPriceLine({price:RECENT_SWINGS.L.price,color:'#1fc25a',lineWidth:1,lineStyle:3,axisLabelVisible:true,title:'Recent Swing Low'}));
+  }
+}
+function renderDrawList(){
+  const box=$('drawList'); if(!box) return;
+  if(!DRAWINGS.length){box.innerHTML='<span style="color:var(--mu);font-size:11.5px">No drawings yet — click "Draw line" then click two points on the chart.</span>';return}
+  box.innerHTML=DRAWINGS.map((d,i)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:12px">
+    <span>Line ${i+1} — ${d.p1.price.toFixed(2)} → ${d.p2.price.toFixed(2)}</span>
+    <button class="toolbtn" data-del="${i}" style="padding:1px 8px">×</button></div>`).join('');
+  box.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{
+    DRAWINGS.splice(parseInt(b.dataset.del),1);redrawOverlay();renderDrawList();
+  });
+}
 
 function loadChart(symbol,exchange,tf,level,swing){
-  DRAWINGS=[];PENDING=null;DRAW_MODE=false;
+  DRAWINGS=[];PENDING=null;DRAW_MODE=false;RECENT_SWINGS=null;SWING_LINES=[];
+  CUR_SYMBOL=symbol;CUR_TF=tf;
   $('chartWrap').innerHTML=`
     <div style="display:flex;gap:6px;padding:0 0 8px;flex-wrap:wrap">
       <button class="toolbtn" id="zIn" title="Zoom in">+</button>
@@ -544,6 +571,13 @@ function loadChart(symbol,exchange,tf,level,swing){
       <button class="toolbtn" id="zFit" title="Fit all candles">Fit</button>
       <button class="toolbtn" id="drawBtn" title="Click two points on the chart to draw a trendline">✎ Draw line</button>
       <button class="toolbtn" id="clearBtn" title="Remove drawn lines">Clear lines</button>
+      <button class="toolbtn" id="setBtn" title="Chart settings" style="margin-left:auto">⚙ Settings</button>
+    </div>
+    <div id="setPanel" class="hidden" style="border:1px solid var(--bd);border-radius:8px;padding:10px;margin-bottom:8px;background:var(--card)">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--tx);text-transform:none;margin-bottom:6px"><input type="checkbox" id="optSwings" checked> Show recent swing high/low</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--tx);text-transform:none;margin-bottom:8px"><input type="checkbox" id="optWatermark" checked> Show watermark</label>
+      <div style="font-size:11px;color:var(--mu);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Drawings</div>
+      <div id="drawList"></div>
     </div>
     <div id="cchart" style="height:calc(100% - 62px);width:100%;position:relative"></div>
     <div style="text-align:right;padding:4px 6px"><a href="https://www.tradingview.com/chart/?symbol=NSE:${encodeURIComponent(symbol)}" target="_blank" style="color:var(--ac);font-size:11.5px;text-decoration:none">Inspect on TradingView.com ↗</a></div>`;
@@ -557,8 +591,8 @@ function loadChart(symbol,exchange,tf,level,swing){
         grid:{vertLines:{color:'#181818'},horzLines:{color:'#181818'}},
         timeScale:{timeVisible:true,borderColor:'#232323'},
         rightPriceScale:{borderColor:'#232323'},
-        watermark:{visible:true,text:symbol+'  ·  '+(TF_LABEL[tf]||tf)+'\nCHoCH Screener',color:'rgba(255,255,255,0.10)',fontSize:22,horzAlign:'center',vertAlign:'center'},
       });
+      applyWatermark();
       if(typeof CHART.addCandlestickSeries!=='function'){fail('Chart library version mismatch (addCandlestickSeries missing). Try a hard refresh (Ctrl/Cmd+Shift+R).');return}
       SERIES=CHART.addCandlestickSeries({upColor:'#1fc25a',downColor:'#ff4d4d',borderVisible:false,wickUpColor:'#1fc25a',wickDownColor:'#ff4d4d'});
       const ov=document.createElement('canvas');
@@ -579,7 +613,7 @@ function loadChart(symbol,exchange,tf,level,swing){
         const price=SERIES.coordinateToPrice(e.clientY-rect.top);
         if(time==null||price==null) return;
         if(!PENDING){PENDING={time,price}}
-        else{DRAWINGS.push({p1:PENDING,p2:{time,price}});PENDING=null;redrawOverlay()}
+        else{DRAWINGS.push({p1:PENDING,p2:{time,price}});PENDING=null;redrawOverlay();renderDrawList()}
       });
       $('zIn').onclick=()=>zoom(0.7);
       $('zOut').onclick=()=>zoom(1.4);
@@ -590,7 +624,11 @@ function loadChart(symbol,exchange,tf,level,swing){
         $('drawBtn').style.background=DRAW_MODE?'var(--ac)':'';
         $('drawBtn').style.color=DRAW_MODE?'#000':'';
       };
-      $('clearBtn').onclick=()=>{DRAWINGS=[];PENDING=null;redrawOverlay()};
+      $('clearBtn').onclick=()=>{DRAWINGS=[];PENDING=null;redrawOverlay();renderDrawList()};
+      $('setBtn').onclick=()=>{$('setPanel').classList.toggle('hidden')};
+      $('optSwings').onchange=e=>{SHOW_SWINGS=e.target.checked;applySwingLines()};
+      $('optWatermark').onchange=e=>{SHOW_WATERMARK=e.target.checked;applyWatermark()};
+      renderDrawList();
     }catch(e){fail('Chart failed to initialize: '+e);return}
     fetch('/api/candles?'+new URLSearchParams({symbol,exchange,tf,swing}),{headers:H()}).then(r=>r.json()).then(d=>{
       if(d.error){fail(d.error);return}
@@ -598,12 +636,17 @@ function loadChart(symbol,exchange,tf,level,swing){
       try{
         SERIES.setData(d.candles);
         SERIES.createPriceLine({price:level,color:'#ff9f1c',lineWidth:2,lineStyle:2,axisLabelVisible:true,title:'Broken level'});
-        if(d.swings&&d.swings.length){
-          SERIES.setMarkers(d.swings.map(s=>({time:s.time,position:s.type==='H'?'aboveBar':'belowBar',
-            color:s.type==='H'?'#ff4d4d':'#1fc25a',shape:s.type==='H'?'arrowDown':'arrowUp',text:s.type})));
-          ZIG=CHART.addLineSeries({color:'#5b6470',lineWidth:1,lastValueVisible:false,priceLineVisible:false});
-          ZIG.setData(d.swings.map(s=>({time:s.time,value:s.price})));
+        // Only the single most recent swing high and the single most recent swing
+        // low - not the full history - to keep the chart readable.
+        RECENT_SWINGS={H:null,L:null};
+        if(d.swings){
+          for(let i=d.swings.length-1;i>=0&&(!RECENT_SWINGS.H||!RECENT_SWINGS.L);i--){
+            const s=d.swings[i];
+            if(s.type==='H'&&!RECENT_SWINGS.H) RECENT_SWINGS.H=s;
+            if(s.type==='L'&&!RECENT_SWINGS.L) RECENT_SWINGS.L=s;
+          }
         }
+        applySwingLines();
         CHART.timeScale().fitContent();
         redrawOverlay();
       }catch(e){fail('Chart failed to render: '+e)}
