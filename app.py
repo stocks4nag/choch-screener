@@ -498,25 +498,39 @@ function selectRow(i){
 let CHART=null, SERIES=null;
 function loadChart(symbol,exchange,tf,level){
   $('chartWrap').innerHTML='<div id="cchart" style="height:calc(100% - 26px);width:100%"></div><div style="text-align:right;padding:4px 6px"><a href="https://www.tradingview.com/chart/?symbol=NSE:'+encodeURIComponent(symbol)+'" target="_blank" style="color:var(--ac);font-size:11.5px;text-decoration:none">Inspect on TradingView.com ↗</a></div>';
+  const el=$('cchart');
+  function fail(msg){el.innerHTML='<div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--mu);font-size:13px;padding:20px;text-align:center">'+msg+'</div>'}
   function draw(){
-    const el=$('cchart');
-    CHART=LightweightCharts.createChart(el,{
-      layout:{background:{color:'#000'},textColor:'#eef0e8'},
-      grid:{vertLines:{color:'#181818'},horzLines:{color:'#181818'}},
-      timeScale:{timeVisible:true,borderColor:'#232323'},
-      rightPriceScale:{borderColor:'#232323'},
-    });
-    SERIES=CHART.addCandlestickSeries({upColor:'#1fc25a',downColor:'#ff4d4d',borderVisible:false,wickUpColor:'#1fc25a',wickDownColor:'#ff4d4d'});
-    new ResizeObserver(()=>CHART.applyOptions({width:el.clientWidth,height:el.clientHeight})).observe(el);
+    try{
+      if(!window.LightweightCharts||typeof LightweightCharts.createChart!=='function'){fail('Chart library failed to load. Check your internet connection and reload.');return}
+      CHART=LightweightCharts.createChart(el,{
+        layout:{background:{color:'#000'},textColor:'#eef0e8'},
+        grid:{vertLines:{color:'#181818'},horzLines:{color:'#181818'}},
+        timeScale:{timeVisible:true,borderColor:'#232323'},
+        rightPriceScale:{borderColor:'#232323'},
+      });
+      if(typeof CHART.addCandlestickSeries!=='function'){fail('Chart library version mismatch (addCandlestickSeries missing). Try a hard refresh (Ctrl/Cmd+Shift+R).');return}
+      SERIES=CHART.addCandlestickSeries({upColor:'#1fc25a',downColor:'#ff4d4d',borderVisible:false,wickUpColor:'#1fc25a',wickDownColor:'#ff4d4d'});
+      new ResizeObserver(()=>{try{CHART.applyOptions({width:el.clientWidth,height:el.clientHeight})}catch(e){}}).observe(el);
+    }catch(e){fail('Chart failed to initialize: '+e);return}
     fetch('/api/candles?'+new URLSearchParams({symbol,exchange,tf}),{headers:H()}).then(r=>r.json()).then(d=>{
-      if(d.error){el.innerHTML='<div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--mu);font-size:13px;padding:20px;text-align:center">'+d.error+'</div>';return}
-      SERIES.setData(d.candles);
-      SERIES.createPriceLine({price:level,color:'var(--ac)',lineWidth:2,lineStyle:2,axisLabelVisible:true,title:'Broken level'});
-      CHART.timeScale().fitContent();
-    }).catch(e=>{el.innerHTML='<div style="padding:20px;color:var(--mu);font-size:13px">Chart failed to load: '+e+'</div>'});
+      if(d.error){fail(d.error);return}
+      if(!d.candles||!d.candles.length){fail('No candle data returned for this symbol/timeframe.');return}
+      try{
+        SERIES.setData(d.candles);
+        SERIES.createPriceLine({price:level,color:'#ff9f1c',lineWidth:2,lineStyle:2,axisLabelVisible:true,title:'Broken level'});
+        CHART.timeScale().fitContent();
+      }catch(e){fail('Chart failed to render: '+e)}
+    }).catch(e=>fail('Data request failed: '+e));
   }
   if(window.LightweightCharts){draw();}
-  else{const s=document.createElement('script');s.src='https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js';s.onload=draw;document.body.appendChild(s);}
+  else{
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js';
+    s.onload=draw;
+    s.onerror=()=>fail('Could not load the charting library from the CDN. Check your internet connection.');
+    document.body.appendChild(s);
+  }
 }
 </script></body></html>"""
 
