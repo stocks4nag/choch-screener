@@ -408,12 +408,12 @@ $('grpSel').onchange=()=>{
     show_ind_select();hide('custwrap');
     $('indSel').innerHTML='<option value="">All industries</option>';
     (META.group_industries[g]||[]).forEach(v=>{const o=document.createElement('option');o.textContent=v;o.value=v;$('indSel').appendChild(o)});
+    show('s_final');
   }
 };
 function hide_ind_select(){$('indSel').classList.add('hidden')}
 function show_ind_select(){$('indSel').classList.remove('hidden')}
 
-$('indSel').onchange=()=>{show('s_final')};
 $('custom').oninput=()=>{
   const g=$('grpSel').value;
   if(g===META.custom_label||g===META.nifty500_label){localStorage.setItem(pasteKey(g),$('custom').value)}
