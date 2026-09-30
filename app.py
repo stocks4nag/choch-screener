@@ -213,8 +213,10 @@ def guard():
 
 @app.route("/api/meta")
 def meta():
+    gi = {g: sorted({v[1] for v in d.values()}) for g, d in GROUPS.items()}
     inds = sorted({v[1] for g in GROUPS.values() for v in g.values()})
-    return jsonify(groups=list(GROUPS) + [CUSTOM_LABEL], industries=inds)
+    return jsonify(groups=list(GROUPS) + [CUSTOM_LABEL], industries=inds,
+                   group_industries=gi, custom_label=CUSTOM_LABEL)
 
 
 @app.route("/api/scan")
@@ -257,44 +259,207 @@ def home():
 
 PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CHoCH Screener</title><style>
-:root{--bg:#f6f7f9;--card:#fff;--tx:#14181f;--mu:#667085;--bd:#e3e6eb;--ac:#2557d6;--up:#0a8f4d;--dn:#d02c3a}
-@media(prefers-color-scheme:dark){:root{--bg:#0f1218;--card:#181c24;--tx:#e8ebf0;--mu:#8b93a3;--bd:#272d38;--ac:#6b93ff;--up:#35c47a;--dn:#ff6b78}}
-*{box-sizing:border-box}body{margin:0;font:15px system-ui,sans-serif;background:var(--bg);color:var(--tx)}
-main{max-width:1100px;margin:0 auto;padding:20px 14px}h1{font-size:20px;margin:0 0 4px}.sub{color:var(--mu);margin:0 0 16px;font-size:13px}
-.panel{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
-label{display:block;font-size:12px;color:var(--mu);margin-bottom:4px}select,input{width:100%;padding:9px;border-radius:8px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font-size:14px}
-button{padding:10px 18px;border:0;border-radius:8px;background:var(--ac);color:#fff;font-weight:600;font-size:15px;cursor:pointer;align-self:end}button:disabled{opacity:.6}
-#st{margin:14px 2px;color:var(--mu);font-size:13px}.tw{overflow-x:auto;background:var(--card);border:1px solid var(--bd);border-radius:12px}
-table{width:100%;border-collapse:collapse;min-width:720px}th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--bd);white-space:nowrap}th{font-size:12px;color:var(--mu);cursor:pointer}
-.b{color:var(--up);font-weight:600}.s{color:var(--dn);font-weight:600}a{color:var(--ac);text-decoration:none}
-</style></head><body><main>
-<h1>CHoCH Screener &middot; NSE / BSE</h1><p class="sub">Finds stocks where price closed through the level protected by the latest BOS (change of character).</p>
-<div class="panel">
-<div><label>Exchange</label><select id="ex"><option>NSE</option><option>BSE</option></select></div>
-<div><label>Segment / Index</label><select id="grp"></select></div>
-<div><label>Sector / Industry</label><select id="ind"><option value="">All</option></select></div>
-<div id="custwrap" style="display:none;grid-column:1/-1"><label>Paste symbols (comma or new line separated, e.g. RELIANCE, TCS, INFY)</label><textarea id="custom" rows="3" style="width:100%;padding:9px;border-radius:8px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font-family:inherit"></textarea>
-<p style="font-size:12px;color:var(--mu);margin:6px 0 0">To get the full Nifty 500 list: open <a href="https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv" target="_blank">this link</a> in your own browser (it only blocks automated requests, not you), open the downloaded CSV in Excel, copy the Symbol column, and paste it here.</p></div>
-<div><label>Timeframe</label><select id="tf"><option value="15m">15 min</option><option value="1h">1 hour</option><option value="4h">4 hour</option><option value="1d" selected>Daily</option></select></div>
-<div><label>CHoCH type</label><select id="type"><option value="both">Both</option><option value="bull">Bullish</option><option value="bear">Bearish</option></select></div>
-<div><label>Within last (candles)</label><input id="within" type="number" value="3" min="0" max="50"></div>
-<div><label>Swing size (candles each side)</label><input id="swing" type="number" value="3" min="2" max="10"></div>
-<div id="keyw" style="display:none"><label>Access key</label><input id="key" type="password"></div>
-<button id="go">Scan</button></div>
-<div id="st"></div><div class="tw"><table><thead><tr><th>Symbol</th><th>Company</th><th>Industry</th><th>Signal</th><th>Candles ago</th><th>Broken level</th><th>Close</th><th>BOS before (candles)</th><th>Chart</th></tr></thead><tbody id="tb"></tbody></table></div>
-</main><script>
-const $=i=>document.getElementById(i);const H=()=>({'X-Key':$('key').value||localStorage.k||''});
-function fill(sel,arr){arr.forEach(v=>{const o=document.createElement('option');o.textContent=v;o.value=v;$(sel).appendChild(o)})}
-fetch('/api/meta').then(r=>r.json()).then(m=>{fill('grp',m.groups);fill('ind',m.industries)}).catch(()=>{$('keyw').style.display='block'});
+:root{--bg:#000;--panel:#0a0a0a;--card:#111;--bd:#232323;--tx:#eef0e8;--mu:#8a8f86;--ac:#ff9f1c;--up:#1fc25a;--dn:#ff4d4d}
+*{box-sizing:border-box}body{margin:0;font:14px/1.4 system-ui,sans-serif;background:var(--bg);color:var(--tx);height:100vh;overflow:hidden}
+.layout{display:flex;height:100vh}
+.left{width:340px;min-width:280px;display:flex;flex-direction:column;border-right:1px solid var(--bd);background:var(--panel)}
+.filters{padding:16px;border-bottom:1px solid var(--bd);overflow-y:auto;max-height:62vh}
+.results{flex:1;padding:14px;overflow-y:auto;min-height:0}
+.right{flex:1;display:flex;flex-direction:column;padding:16px;gap:12px;min-width:0}
+h1{font-size:15px;margin:0 0 2px;letter-spacing:.3px}h1 span{color:var(--ac)}
+.sub{color:var(--mu);margin:0 0 16px;font-size:11.5px}
+.step{margin-bottom:14px;animation:fade .2s ease}
+.hidden{display:none!important}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+label{display:block;font-size:11px;color:var(--mu);margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px}
+select,input,textarea{width:100%;padding:9px;border-radius:6px;border:1px solid var(--bd);background:#000;color:var(--tx);font-size:13.5px;font-family:inherit}
+select:focus,input:focus,textarea:focus{outline:none;border-color:var(--ac)}
+textarea{resize:vertical}
+.row2{display:flex;gap:8px}.row2>div{flex:1}
+button.primary{padding:10px;border:0;border-radius:6px;background:var(--ac);color:#000;font-weight:700;font-size:13.5px;cursor:pointer;width:100%;margin-top:4px}
+button.primary:disabled{opacity:.45;cursor:default}
+.hint{font-size:11px;color:var(--mu);margin:6px 0 0;line-height:1.5}
+.hint a{color:var(--ac)}
+#st{color:var(--mu);font-size:12px;margin-bottom:10px}
+.rescard{border:1px solid var(--bd);border-radius:8px;padding:10px 11px;margin-bottom:8px;cursor:pointer;background:var(--card);transition:border-color .15s}
+.rescard:hover{border-color:#3a3a3a}
+.rescard.active{border-color:var(--ac);background:#161208}
+.rc-top{display:flex;justify-content:space-between;align-items:baseline}
+.rc-sym{font-weight:700;font-size:13.5px}
+.rc-ago{color:var(--mu);font-size:11px}
+.rc-name{color:var(--mu);font-size:11.5px;margin-top:2px}
+.pill{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;margin-top:5px}
+.pill.bull{color:var(--up);background:#0d2216}
+.pill.bear{color:var(--dn);background:#2a1010}
+.emptynote{color:var(--mu);font-size:12.5px;padding:20px 4px;text-align:center}
+#infoCard{border:1px solid var(--bd);border-radius:10px;padding:14px;background:var(--card);display:none}
+#infoCard.show{display:block}
+.info-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:8px}
+.info-grid div{background:#000;border:1px solid var(--bd);border-radius:6px;padding:8px 10px}
+.info-grid .l{font-size:10.5px;color:var(--mu);text-transform:uppercase;letter-spacing:.3px}
+.info-grid .v{font-size:15px;font-weight:700;margin-top:2px}
+#chartWrap{flex:1;border:1px solid var(--bd);border-radius:10px;overflow:hidden;background:#000;min-height:0}
+#chartPlaceholder{height:100%;display:flex;align-items:center;justify-content:center;color:var(--mu);font-size:13px;text-align:center;padding:20px}
+.keyw{margin-top:10px}
+</style></head><body>
+<div class="layout">
+  <div class="left">
+    <div class="filters">
+      <h1>CHo<span>CH</span> Screener</h1>
+      <p class="sub">Structure-break scanner for NSE &amp; BSE</p>
+
+      <div class="step" id="s_ex">
+        <label>1. Exchange</label>
+        <select id="exSel"><option value="" disabled selected>Select exchange</option><option>NSE</option><option>BSE</option></select>
+      </div>
+
+      <div class="step hidden" id="s_grp">
+        <label>2. Segment / Index</label>
+        <select id="grpSel"><option value="" disabled selected>Select segment</option></select>
+      </div>
+
+      <div class="step hidden" id="s_ind">
+        <label>3. Sector / Industry</label>
+        <select id="indSel"><option value="">All industries</option></select>
+        <div id="custwrap" class="hidden">
+          <textarea id="custom" rows="3" placeholder="RELIANCE, TCS, INFY ..."></textarea>
+          <p class="hint">Get the full Nifty 500 list: open <a href="https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv" target="_blank">this link</a> in your own browser (it blocks bots, not you), open the CSV in Excel, copy the Symbol column, paste it above.</p>
+        </div>
+      </div>
+
+      <div class="step hidden" id="s_final">
+        <label>4. Timeframe</label>
+        <select id="tf"><option value="15m">15 min</option><option value="1h">1 hour</option><option value="4h">4 hour</option><option value="1d" selected>Daily</option></select>
+        <div class="row2" style="margin-top:10px">
+          <div><label>CHoCH type</label><select id="type"><option value="both">Both</option><option value="bull">Bullish</option><option value="bear">Bearish</option></select></div>
+          <div><label>Within (candles)</label><input id="within" type="number" value="3" min="0" max="50"></div>
+        </div>
+        <div style="margin-top:10px"><label>Swing size (candles each side)</label><input id="swing" type="number" value="3" min="2" max="10"></div>
+        <div class="keyw hidden" id="keyw"><label>Access key</label><input id="key" type="password"></div>
+        <button class="primary" id="go">Scan</button>
+      </div>
+    </div>
+    <div class="results">
+      <div id="st"></div>
+      <div id="resList"><p class="emptynote">Results will appear here after you scan.</p></div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div id="infoCard"></div>
+    <div id="chartWrap"><div id="chartPlaceholder">Select a stock from the results list to load its chart here.</div></div>
+  </div>
+</div>
+<script>
+const $=i=>document.getElementById(i);
+const H=()=>({'X-Key':$('key').value||localStorage.k||''});
+let META={groups:[],industries:[],group_industries:{},custom_label:'Custom'};
+let LAST_ROWS=[];
+
+fetch('/api/meta').then(r=>r.json()).then(m=>{
+  META=m;
+  m.groups.forEach(g=>{const o=document.createElement('option');o.textContent=g;o.value=g;$('grpSel').appendChild(o)});
+}).catch(()=>{$('keyw').classList.remove('hidden')});
 $('key').value=localStorage.k||'';
-$('grp').onchange=()=>{$('custwrap').style.display=$('grp').value.startsWith('Custom')?'block':'none'};
-$('go').onclick=async()=>{localStorage.k=$('key').value;$('go').disabled=true;$('st').textContent='Scanning… first run can take up to a minute.';$('tb').innerHTML='';
-const q=new URLSearchParams({exchange:$('ex').value,group:$('grp').value,industry:$('ind').value,tf:$('tf').value,type:$('type').value,within:$('within').value,swing:$('swing').value,symbols:$('custom').value});
-try{const r=await fetch('/api/scan?'+q,{headers:H()});const d=await r.json();
-if(d.error){$('st').textContent=d.error;if(r.status==401)$('keyw').style.display='block';}
-else{$('st').textContent=`${d.rows.length} match(es) · scanned ${d.scanned} of ${d.total} stocks`;
-$('tb').innerHTML=d.rows.map(x=>`<tr><td><b>${x.symbol}</b></td><td>${x.name}</td><td>${x.industry}</td><td class="${x.event[0]=='B'&&x.event.startsWith('Bull')?'b':'s'}">${x.event}</td><td>${x.bars_ago}</td><td>${x.level}</td><td>${x.close}</td><td>${x.bos_ago}</td><td><a target="_blank" href="https://www.tradingview.com/chart/?symbol=${$('ex').value}:${x.symbol}">Open</a></td></tr>`).join('')}}
-catch(e){$('st').textContent='Request failed: '+e}$('go').disabled=false};
+
+function show(id){$(id).classList.remove('hidden')}
+function hide(id){$(id).classList.add('hidden')}
+function resetFrom(step){
+  if(step<=1){hide('s_grp');$('grpSel').selectedIndex=0}
+  if(step<=2){hide('s_ind')}
+  if(step<=3){hide('s_final')}
+  $('resList').innerHTML='<p class="emptynote">Results will appear here after you scan.</p>';
+  $('st').textContent='';
+  clearChart();
+}
+
+$('exSel').onchange=()=>{resetFrom(1);show('s_grp')};
+
+$('grpSel').onchange=()=>{
+  const g=$('grpSel').value;
+  resetFrom(2);show('s_ind');
+  if(g===META.custom_label){
+    hide_ind_select();show('custwrap');show('s_final');
+  }else{
+    show_ind_select();hide('custwrap');
+    $('indSel').innerHTML='<option value="">All industries</option>';
+    (META.group_industries[g]||[]).forEach(v=>{const o=document.createElement('option');o.textContent=v;o.value=v;$('indSel').appendChild(o)});
+  }
+};
+function hide_ind_select(){$('indSel').classList.add('hidden')}
+function show_ind_select(){$('indSel').classList.remove('hidden')}
+
+$('indSel').onchange=()=>{show('s_final')};
+
+function clearChart(){
+  $('infoCard').classList.remove('show');$('infoCard').innerHTML='';
+  $('chartWrap').innerHTML='<div id="chartPlaceholder">Select a stock from the results list to load its chart here.</div>';
+  document.querySelectorAll('.rescard').forEach(r=>r.classList.remove('active'));
+}
+
+$('go').onclick=async()=>{
+  localStorage.k=$('key').value;
+  $('go').disabled=true;$('st').textContent='Scanning… first run can take up to a minute.';
+  $('resList').innerHTML='';clearChart();
+  const q=new URLSearchParams({exchange:$('exSel').value,group:$('grpSel').value,industry:$('indSel').value,
+    tf:$('tf').value,type:$('type').value,within:$('within').value,swing:$('swing').value,symbols:$('custom').value});
+  try{
+    const r=await fetch('/api/scan?'+q,{headers:H()});const d=await r.json();
+    if(d.error){$('st').textContent=d.error;if(r.status==401)show('keyw');}
+    else{
+      LAST_ROWS=d.rows;
+      $('st').textContent=`${d.rows.length} match(es) · scanned ${d.scanned} of ${d.total} stocks`;
+      if(!d.rows.length){$('resList').innerHTML='<p class="emptynote">No CHoCH found in this selection. Try a wider "within" window or a different timeframe.</p>'}
+      else{
+        $('resList').innerHTML=d.rows.map((x,i)=>{
+          const bull=x.event.startsWith('Bull');
+          return `<div class="rescard" data-i="${i}">
+            <div class="rc-top"><span class="rc-sym">${x.symbol}</span><span class="rc-ago">${x.bars_ago} candle(s) ago</span></div>
+            <div class="rc-name">${x.name} · ${x.industry}</div>
+            <span class="pill ${bull?'bull':'bear'}">${x.event}</span>
+          </div>`;
+        }).join('');
+        document.querySelectorAll('.rescard').forEach(el=>el.onclick=()=>selectRow(parseInt(el.dataset.i)));
+      }
+    }
+  }catch(e){$('st').textContent='Request failed: '+e}
+  $('go').disabled=false;
+};
+
+function selectRow(i){
+  const x=LAST_ROWS[i];
+  document.querySelectorAll('.rescard').forEach(r=>r.classList.remove('active'));
+  document.querySelector(`.rescard[data-i="${i}"]`).classList.add('active');
+  const bull=x.event.startsWith('Bull');
+  $('infoCard').classList.add('show');
+  $('infoCard').innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:baseline">
+      <div style="font-size:16px;font-weight:700">${x.symbol} <span style="color:var(--mu);font-weight:400;font-size:12.5px">${x.name}</span></div>
+      <span class="pill ${bull?'bull':'bear'}" style="font-size:12px">${x.event}</span>
+    </div>
+    <div class="info-grid">
+      <div><div class="l">Last Close</div><div class="v">${x.close}</div></div>
+      <div><div class="l">Broken Level</div><div class="v">${x.level}</div></div>
+      <div><div class="l">Candles Ago</div><div class="v">${x.bars_ago}</div></div>
+      <div><div class="l">BOS Before (candles)</div><div class="v">${x.bos_ago}</div></div>
+      <div><div class="l">Event Bar Time</div><div class="v" style="font-size:12px">${x.time}</div></div>
+      <div><div class="l">Industry</div><div class="v" style="font-size:12px">${x.industry}</div></div>
+    </div>
+    <p class="hint">Last Close is the most recent completed candle (Yahoo data, ~15 min delayed) — not a live tick. The TradingView chart on the right is the real live chart; look for price near the Broken Level above around the Event Bar Time to see the CHoCH visually.</p>`;
+  loadTV(x.symbol,$('exSel').value,$('tf').value);
+}
+
+function loadTV(symbol,exchange,tf){
+  $('chartWrap').innerHTML='<div id="tvc" style="height:100%;width:100%"></div>';
+  const ivmap={'15m':'15','1h':'60','4h':'240','1d':'D'};
+  function mk(){
+    new TradingView.widget({autosize:true,symbol:exchange+':'+symbol,interval:ivmap[tf]||'D',
+      timezone:'Asia/Kolkata',theme:'dark',style:'1',locale:'in',toolbar_bg:'#000000',
+      enable_publishing:false,hide_top_toolbar:false,withdateranges:true,container_id:'tvc'});
+  }
+  if(window.TradingView){mk();}
+  else{const s=document.createElement('script');s.src='https://s3.tradingview.com/tv.js';s.onload=mk;document.body.appendChild(s);}
+}
 </script></body></html>"""
 
 if __name__ == "__main__":
