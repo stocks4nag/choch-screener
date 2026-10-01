@@ -218,7 +218,7 @@ def fetch(tickers, tf):
                 d = d.dropna(subset=["Close"])
                 if tf == "4h":
                     d = d.resample("4h").agg({"Open": "first", "High": "max", "Low": "min",
-                                              "Close": "last"}).dropna()
+                                              "Close": "last", "Volume": "sum"}).dropna()
                 if len(d) > 30: out[t] = d
             except Exception:
                 pass
@@ -300,8 +300,8 @@ def candles():
     if d is None or len(d) == 0:
         return jsonify(error="No price data available for this symbol/timeframe."), 404
     rows = [dict(time=int(pd.Timestamp(idx).timestamp()), open=round(float(o), 2), high=round(float(h), 2),
-                 low=round(float(l), 2), close=round(float(c), 2))
-            for idx, o, h, l, c in zip(d.index, d["Open"], d["High"], d["Low"], d["Close"])]
+                 low=round(float(l), 2), close=round(float(c), 2), volume=int(v) if pd.notna(v) else 0)
+            for idx, o, h, l, c, v in zip(d.index, d["Open"], d["High"], d["Low"], d["Close"], d["Volume"])]
     return jsonify(candles=rows, swings=swing_points(d, n))
 
 
@@ -354,6 +354,11 @@ button.primary:disabled{opacity:.45;cursor:default}
 #chartWrap{flex:1;border:1px solid var(--bd);border-radius:10px;overflow:hidden;background:#000;min-height:0;padding:10px;display:flex;flex-direction:column}
 .toolbtn{padding:5px 10px;border-radius:6px;border:1px solid var(--bd);background:#111;color:var(--tx);font-size:12px;cursor:pointer}
 .toolbtn:hover{border-color:var(--ac)}
+.chartLegend{position:absolute;top:8px;left:10px;z-index:5;pointer-events:none;font-size:12px;line-height:1.5}
+.chartLegend .legend-title{font-weight:700;color:var(--tx)}
+.chartLegend .legend-tf{font-weight:400;color:var(--mu)}
+.chartLegend .legend-ohlc{font-variant-numeric:tabular-nums}
+.zoombar{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);z-index:5;display:flex;gap:6px;background:rgba(10,10,10,0.7);padding:5px;border-radius:8px;border:1px solid var(--bd)}
 #chartPlaceholder{height:100%;display:flex;align-items:center;justify-content:center;color:var(--mu);font-size:13px;text-align:center;padding:20px}
 .keyw{margin-top:10px}
 </style></head><body>
@@ -513,44 +518,22 @@ function selectRow(i){
 }
 
 const TF_LABEL={'15m':'15 min','1h':'1 hour','4h':'4 hour','1d':'Daily'};
-let CHART=null, SERIES=null, DRAWINGS=[], TOOL='cursor', PENDING=null;
-let SHOW_WATERMARK=true, CUR_SYMBOL='', CUR_TF='';
+let CHART=null, SERIES=null, SHOW_WATERMARK=true, CUR_SYMBOL='', CUR_TF='', VOL_MAP={};
 
-function redrawOverlay(){
-  const canvas=document.getElementById('ov'); if(!canvas||!CHART||!SERIES) return;
-  const ctx=canvas.getContext('2d');
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  ctx.strokeStyle='#ff9f1c';ctx.lineWidth=1.5;
-  DRAWINGS.forEach(dr=>{
-    const x1=CHART.timeScale().timeToCoordinate(dr.p1.time), y1=SERIES.priceToCoordinate(dr.p1.price);
-    const x2=CHART.timeScale().timeToCoordinate(dr.p2.time), y2=SERIES.priceToCoordinate(dr.p2.price);
-    if(x1==null||x2==null||y1==null||y2==null) return;
-    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
-  });
-}
-let ZOOM_RAF=null;
-function zoom(factor){
-  if(!CHART) return;
-  const ts=CHART.timeScale(); const r=ts.getVisibleLogicalRange(); if(!r) return;
-  const c=(r.from+r.to)/2, half=(r.to-r.from)/2*factor;
-  ts.setVisibleLogicalRange({from:c-half,to:c+half});
-  if(ZOOM_RAF) cancelAnimationFrame(ZOOM_RAF);
-  ZOOM_RAF=requestAnimationFrame(redrawOverlay);
-}
 function applyWatermark(){
   if(!CHART) return;
   CHART.applyOptions({watermark:{visible:SHOW_WATERMARK,text:CUR_SYMBOL+'  ·  '+(TF_LABEL[CUR_TF]||CUR_TF)+'\nCHoCH Screener',
-    color:'rgba(255,255,255,0.10)',fontSize:22,horzAlign:'center',vertAlign:'center'}});
+    color:'rgba(255,255,255,0.08)',fontSize:22,horzAlign:'center',vertAlign:'center'}});
 }
-function setTool(t){
-  TOOL=t;PENDING=null;
-  document.querySelectorAll('.vtool').forEach(b=>b.classList.toggle('active',b.dataset.tool===t));
-  const ov=document.getElementById('ov'); if(ov) ov.style.pointerEvents=(t==='cursor')?'none':'auto';
+function fmtVol(v){
+  if(v>=10000000) return (v/10000000).toFixed(2)+'Cr';
+  if(v>=100000) return (v/100000).toFixed(2)+'L';
+  if(v>=1000) return (v/1000).toFixed(1)+'K';
+  return String(v);
 }
 
 function loadChart(symbol,exchange,tf,level,swing){
-  DRAWINGS=[];PENDING=null;TOOL='cursor';
-  CUR_SYMBOL=symbol;CUR_TF=tf;
+  CUR_SYMBOL=symbol;CUR_TF=tf;VOL_MAP={};
   $('chartWrap').innerHTML=`
     <div style="display:flex;justify-content:flex-end;padding:0 0 6px">
       <button class="toolbtn" id="setBtn" title="Chart settings">⚙</button>
@@ -559,11 +542,9 @@ function loadChart(symbol,exchange,tf,level,swing){
       <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--tx);text-transform:none"><input type="checkbox" id="optWatermark" checked> Show watermark</label>
     </div>
     <div id="cchart" style="height:calc(100% - 44px);width:100%;position:relative">
-      <div class="vtoolbar">
-        <button class="vtool active" data-tool="cursor" title="Cursor (pan/zoom the chart)">⟰</button>
-        <button class="vtool" data-tool="trend" title="Trend line — click two points">╱</button>
-        <button class="vtool" data-tool="hline" title="Horizontal line — click once">─</button>
-        <button class="vtool" id="trashBtn" title="Clear all drawings">🗑</button>
+      <div class="chartLegend" id="chartLegend">
+        <div class="legend-title">${symbol} <span class="legend-tf">· ${TF_LABEL[tf]||tf}</span></div>
+        <div class="legend-ohlc" id="legendOhlc"></div>
       </div>
       <div class="zoombar">
         <button class="toolbtn" id="zOut" title="Zoom out">−</button>
@@ -575,7 +556,6 @@ function loadChart(symbol,exchange,tf,level,swing){
   const el=$('cchart');
   function fail(msg){el.innerHTML='<div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--mu);font-size:13px;padding:20px;text-align:center">'+msg+'</div>'}
   function draw(){
-    let ov;
     try{
       if(!window.LightweightCharts||typeof LightweightCharts.createChart!=='function'){fail('Chart library failed to load. Check your internet connection and reload.');return}
       CHART=LightweightCharts.createChart(el,{
@@ -587,43 +567,22 @@ function loadChart(symbol,exchange,tf,level,swing){
       applyWatermark();
       if(typeof CHART.addCandlestickSeries!=='function'){fail('Chart library version mismatch (addCandlestickSeries missing). Try a hard refresh (Ctrl/Cmd+Shift+R).');return}
       SERIES=CHART.addCandlestickSeries({upColor:'#1fc25a',downColor:'#ff4d4d',borderVisible:false,wickUpColor:'#1fc25a',wickDownColor:'#ff4d4d'});
-      ov=document.createElement('canvas');
-      ov.id='ov';ov.style.position='absolute';ov.style.top='0';ov.style.left='0';ov.style.pointerEvents='none';
-      el.appendChild(ov);
-      function sizeAll(){
-        try{CHART.applyOptions({width:el.clientWidth,height:el.clientHeight})}catch(e){}
-        ov.width=el.clientWidth;ov.height=el.clientHeight;
-        redrawOverlay();
-      }
+      function sizeAll(){try{CHART.applyOptions({width:el.clientWidth,height:el.clientHeight})}catch(e){}}
       new ResizeObserver(sizeAll).observe(el);
       sizeAll();
-      CHART.timeScale().subscribeVisibleTimeRangeChange(()=>{
-        if(ZOOM_RAF) cancelAnimationFrame(ZOOM_RAF);
-        ZOOM_RAF=requestAnimationFrame(redrawOverlay);
-      });
-      ov.addEventListener('click',e=>{
-        if(TOOL==='cursor') return;
-        const rect=ov.getBoundingClientRect();
-        const time=CHART.timeScale().coordinateToTime(e.clientX-rect.left);
-        const price=SERIES.coordinateToPrice(e.clientY-rect.top);
-        if(time==null||price==null) return;
-        if(TOOL==='hline'){
-          DRAWINGS.push({hline:true,price,line:SERIES.createPriceLine({price,color:'#ff9f1c',lineWidth:1,lineStyle:0,axisLabelVisible:true,title:'Line'})});
-          return;
-        }
-        if(TOOL==='trend'){
-          if(!PENDING){PENDING={time,price}}
-          else{DRAWINGS.push({p1:PENDING,p2:{time,price}});PENDING=null;redrawOverlay()}
-        }
+      CHART.subscribeCrosshairMove(param=>{
+        const box=$('legendOhlc'); if(!box) return;
+        const bar=param&&param.time&&param.seriesData?param.seriesData.get(SERIES):null;
+        if(!bar){box.innerHTML='';return}
+        const up=bar.close>=bar.open;
+        const col=up?'#1fc25a':'#ff4d4d';
+        const vol=VOL_MAP[param.time];
+        box.innerHTML=`<span style="color:${col}">O ${bar.open.toFixed(2)}  H ${bar.high.toFixed(2)}  L ${bar.low.toFixed(2)}  C ${bar.close.toFixed(2)}</span>`+
+          (vol!=null?`  <span style="color:var(--mu)">Vol ${fmtVol(vol)}</span>`:'');
       });
       $('zIn').onclick=()=>zoom(0.7);
       $('zOut').onclick=()=>zoom(1.4);
-      $('zFit').onclick=()=>{setInitialRange(d_cache);redrawOverlay()};
-      document.querySelectorAll('.vtool[data-tool]').forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
-      $('trashBtn').onclick=()=>{
-        DRAWINGS.forEach(d=>{if(d.hline){try{SERIES.removePriceLine(d.line)}catch(e){}}});
-        DRAWINGS=[];PENDING=null;redrawOverlay();
-      };
+      $('zFit').onclick=()=>setInitialRange(d_cache);
       $('setBtn').onclick=()=>{$('setPanel').classList.toggle('hidden')};
       $('optWatermark').onchange=e=>{SHOW_WATERMARK=e.target.checked;applyWatermark()};
     }catch(e){fail('Chart failed to initialize: '+e);return}
@@ -633,15 +592,20 @@ function loadChart(symbol,exchange,tf,level,swing){
       const lastT=d.candles[d.candles.length-1].time;
       CHART.timeScale().setVisibleRange({from:lastT-7*86400,to:lastT+3600});
     }
+    function zoom(factor){
+      if(!CHART) return;
+      const ts=CHART.timeScale(); const r=ts.getVisibleLogicalRange(); if(!r) return;
+      const c=(r.from+r.to)/2, half=(r.to-r.from)/2*factor;
+      ts.setVisibleLogicalRange({from:c-half,to:c+half});
+    }
     fetch('/api/candles?'+new URLSearchParams({symbol,exchange,tf,swing}),{headers:H()}).then(r=>r.json()).then(d=>{
       if(d.error){fail(d.error);return}
       if(!d.candles||!d.candles.length){fail('No candle data returned for this symbol/timeframe.');return}
       try{
         SERIES.setData(d.candles);
-        SERIES.createPriceLine({price:level,color:'#ff9f1c',lineWidth:2,lineStyle:2,axisLabelVisible:true,title:'Broken level'});
+        d.candles.forEach(c=>{VOL_MAP[c.time]=c.volume});
         d_cache=d;
         setInitialRange(d);
-        redrawOverlay();
       }catch(e){fail('Chart failed to render: '+e)}
     }).catch(e=>fail('Data request failed: '+e));
   }
